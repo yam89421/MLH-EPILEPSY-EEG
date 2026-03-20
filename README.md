@@ -113,7 +113,8 @@ Each window becomes one training sample.
 ## Feature Extraction
 
 Several types of features are extracted from each EEG window.
-This article : https://www.mdpi.com/2227-9717/8/7/846#Introduction, has shown relevance in synchronization measures, such as PLI and WPLI, Hjorth parameters and entropy for epileptic seizure recognition and prediction.
+This article : https://www.mdpi.com/2227-9717/8/7/846/
+has shown relevance in synchronization measures, such as PLI and WPLI, Hjorth parameters and entropy for epileptic seizure recognition and prediction.
 
 These features are so our main targeted variables for this project 
 Here is below others features on which our model may rely on for seizure recognition: 
@@ -193,8 +194,7 @@ Below is the work from EpilepsyBenchmarks, which evaluates several of these metr
 ## State of the Art
 
  A few studies relying on the same dataset for epilepsy seizures recognition
-
-  - https://physionet.org/content/siena-scalp-eeg/1.0.0/PN01/
+  - https://www.mdpi.com/2227-9717/8/7/846
   - https://www.researchgate.net/publication/370951763_Patient-specific_approach_using_data_fusion_and_adversarial_training_for_epileptic_seizure_prediction 
   - https://www.kaggle.com/datasets/abhishekinnvonix/epilepsy-seizure-dataset-seina-scalp-complete
   - https://pmc.ncbi.nlm.nih.gov/articles/PMC10869477/
