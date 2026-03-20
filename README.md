@@ -185,3 +185,21 @@ Model performance will be evaluated using:
 - F1-score
 - False alarm rate
 
+_Below is the work from EpilepsyBenchmarks, which evaluates several of these metrics using different types of models trained on this dataset
+
+        https://epilepsybenchmarks.com/datasets/siena/  _
+
+---
+
+## State of the Art
+
+ A few studies relying on the same dataset for epilepsy seizures recognition
+
+_  - https://physionet.org/content/siena-scalp-eeg/1.0.0/PN01/
+  - https://www.researchgate.net/publication/370951763_Patient-specific_approach_using_data_fusion_and_adversarial_training_for_epileptic_seizure_prediction 
+  - https://www.kaggle.com/datasets/abhishekinnvonix/epilepsy-seizure-dataset-seina-scalp-complete
+  - https://pmc.ncbi.nlm.nih.gov/articles/PMC10869477/
+  - https://www.nature.com/articles/s41598-025-90164-3
+  - https://epilepsybenchmarks.com/datasets/siena/_
+                                                                                                                                                                    
+                                                                                                                                                                    By Yanis AMARA
