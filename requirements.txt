@@ -1,0 +1,11 @@
+mne
+scipy
+numpy
+matplotlib
+scikit-learn
+pandas
+antropy
+imbalanced-learn
+lightgbm
+seaborn
+statsmodels

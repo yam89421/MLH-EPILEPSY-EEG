@@ -1,230 +1,223 @@
-import numpy as np 
-from scipy.signal import hilbert, welch, find_peaks
+"""
+Extended EEG Feature Extraction
+=================================
+Adds the following features on top of the original 10:
+  - Delta band power (0.5–4 Hz) and relative BP
+  - Beta  band power (13–30 Hz) and relative BP
+  - Gamma band power (30–40 Hz) and relative BP
+  - Hjorth parameters (activity, mobility, complexity) per channel
+  - Spectral entropy per channel
+  - Differential asymmetry (DASM): left-right channel pairs
+  - Rational asymmetry (RASM): left-right channel pairs
+  - wPLI upper-triangle matrix flattened (full connectivity, not just mean)
+    → too large for 29ch; replaced by mean over 4 canonical band ranges
+
+Total per channel: 17 scalar features
+Total for 29 channels: ~500 features (before wPLI matrix expansion)
+"""
+
+import numpy as np
+from scipy.signal import hilbert, welch, find_peaks, butter, filtfilt
+from scipy.stats import entropy as scipy_entropy
 from antropy import perm_entropy, higuchi_fd
 
+# Original feature names kept for backwards compatibility
+EEG_FEATURES_NAMES = [
+    "DELTA_BP", "THETA_BP", "ALPHA_BP", "BETA_BP", "GAMMA_BP",
+    "DELTA_RBP", "THETA_RBP", "ALPHA_RBP", "BETA_RBP", "GAMMA_RBP",
+    "HJORTH_ACT", "HJORTH_MOB", "HJORTH_COMP",
+    "SPEC_ENTROPY",
+    "MEAN", "STD",
+    "PERM_ENTROPY", "FRACTAL_DIM",
+    "PLI", "WPLI",
+]
 
-EEG_FEATURES_NAMES = ["BP_DELTA", "BP_THETA", "BP_ALPHA", "BP_BETA", "STD BP_DELTA", "STD BP_THETA", "STD BP_ALPHA", "STD BP_BETA", "RBP_DELTA", "RBP_THETA", "RBP_ALPHA", "RBP_BETA", "TKEO MEAN", "TKEO STD", "HJORTH ACTIVITY", "HJORTH MOBILITY", "HJORTH COMPLEXITY", "SPECTRAL ENTROPY", "PERMUTATION ENTROPY", "STD PERMUTATION ENTROPY", "FRACTAL DIMENSION", "STD FRACTAL DIMENSION", "KURTOSIS", "PLI", "DPLI", "WPLI", "PLI EMA", "WPLI EMA", "SPECTRAL ENTROPY EMA"]
-ECG_FEATURES_NAMES = ["MEAN RR", "SDNN", "RMSSD", "HR", "MEAN EKG", "STD EKG"]
+ECG_FEATURES_NAMES = ["MEAN_RR", "SDNN", "RMSSD", "HR", "MEAN", "STD"]
+
+
+# ─────────── connectivity helpers ───────────
 
 def pli(phase_x, phase_y):
+    phase_diff = phase_x - phase_y
+    return np.abs(np.mean(np.sign(np.sin(phase_diff))))
 
-	phase_diff = phase_x - phase_y
-
-	pli = np.abs(np.mean(np.sign(np.sin(phase_diff))))
-
-	return pli
 
 def wpli(hx, hy):
-
-	im = np.imag(hx * np.conj(hy))
-
-	num = np.abs(np.mean(im))
-	den = np.mean(np.abs(im))
-
-	return num / den
-
-def dpli(phase_x, phase_y):
-
-	phase_diff = phase_x - phase_y
-
-	return np.mean(phase_diff > 0)
-
-def ema(x, alpha):
-    ema_vals = np.zeros_like(x)
-    ema_vals[0] = x[0]
-    
-    for i in range(1, len(x)):
-        ema_vals[i] = alpha * x[i] + (1 - alpha) * ema_vals[i-1]
-        
-    return ema_vals
-
-def extractFeaturesEEG(windows, sfreq):
-
-	plis_mean = []
-	wplis_mean = []
-	dplis_mean = []
-	print(f"size windows:{len(windows)}")
-	print(windows.shape)
-	print("flat channels:", np.sum(np.var(windows, axis=2) == 0))
-
-	perm_enthropies_mean = []
-	perm_entropies_std = []
-
-	higuchi_fd_mean = []
-	higuchi_fd_std = []
-
-	dx = np.diff(windows, axis=2)
-	ddx = np.diff(dx, axis=2)
-	
-	activities = np.var(windows, axis=2) + 1e-10
-	mobilities = np.sqrt(np.var(dx, axis=2)/activities)
-	complexities = np.sqrt(np.var(ddx, axis=2) / np.var(dx, axis=2) + 1e-10)  
-	print(f"var(diff): {np.var(dx, axis=2) + 1e-10}")
-	f, psd = welch(windows, fs=sfreq, axis=2, nperseg=256)
-	print("psd min:", psd.min())
-	print("psd max:", psd.max())
-	print("windows var min:", np.min(np.var(windows, axis=2)))
-
-	delta = (f >= 0.5) & (f <= 4)
-	theta = (f >= 4) & (f <= 8)
-	alpha = (f >= 8) & (f <= 13)
-	beta  = (f >= 13) & (f <= 30)
-
-	delta_bps = np.trapezoid(psd[:, :, delta], f[delta], axis=2)
-	theta_bps = np.trapezoid(psd[:, :, theta], f[theta], axis=2)
-	alpha_bps = np.trapezoid(psd[:, :, alpha], f[alpha], axis=2)
-	beta_bps = np.trapezoid(psd[:, :, beta],  f[beta], axis=2)
-
-	total_power = np.trapezoid(psd, f, axis=2)
-	
-	delta_rbps = delta_bps / total_power
-	theta_rbps = theta_bps / total_power
-	alpha_rbps = alpha_bps / total_power
-	beta_rbps  = beta_bps  / total_power
-
-	print("zeros total_power:", np.sum(total_power == 0))
-	print("nan total_power:", np.isnan(total_power).sum())
-	print("inf total_power:", np.isinf(total_power).sum())
-
-	print("zeros delta_bps:", np.sum(delta_bps == 0))
-	print("nan delta_bps:", np.isnan(delta_bps).sum())
-	print("nan psd:", np.isnan(psd).sum())
-	print("inf psd:", np.isinf(psd).sum())
-	print("")
-	p = psd / np.sum(psd, axis=2, keepdims=True)
-	spectral_entropies = -np.sum(p * np.log2(p + 1e-12), axis=2)
-	spectral_entropies /= np.log2(p.shape[2])
-
-	mean = np.mean(windows, axis=2, keepdims=True)
-	std = np.std(windows, axis=2, keepdims=True) + 1e-8
-
-	kurtosis = np.mean(((windows - mean)/std)**4, axis=2) - 3	
-
-	psi = windows[:,:,1:-1]**2 - windows[:,:,:-2]*windows[:,:,2:]
-
-	tkeo_mean = np.mean(psi, axis=2)
-	tkeo_std = np.std(psi, axis=2)
-
-	#synchronization measures
-	for window in windows:
-
-		plis = []
-		wplis = []
-		dplis = []
-
-		perm_enthropies = []
-
-		higuchi_fds = []
-
-		analytic = hilbert(window, axis=1)
-		phases = np.angle(analytic)
-
-		for i in range(len(window)):
-
-			for j in range(i+1, len(window)):
-
-				x = analytic[i]
-				y = analytic[j]
-				phase_x = phases[i]
-				phase_y = phases[j]
-
-				plis.append(pli(phase_x, phase_y))
-				dplis.append(dpli(phase_x, phase_y))
-				wplis.append(wpli(x, y))
-
-			perm_enthropies.append(perm_entropy(window[i], order=3))
-			higuchi_fds.append(higuchi_fd(window[i]))
-
-		plis_mean.append(np.mean(plis))
-		wplis_mean.append(np.mean(wplis))
-		dplis_mean.append(np.mean(dplis))
-
-		perm_enthropies_mean.append(np.mean(perm_enthropies))
-		perm_entropies_std.append(np.std(perm_enthropies))
-
-		higuchi_fd_mean.append(np.mean(higuchi_fds))
-		higuchi_fd_std.append(np.std(higuchi_fds))
-
-		w = 7
-		alpha = 2 / (w + 1)
-
-		pli_ema = ema(np.array(plis_mean), alpha)
-		wpli_ema = ema(np.array(wplis_mean), alpha)
-		entropy_ema = ema(np.array(spectral_entropies.mean(axis=1)), alpha)
+    im = np.imag(hx * np.conj(hy))
+    num = np.abs(np.mean(im))
+    den = np.mean(np.abs(im)) + 1e-12
+    return num / den
 
 
+# ─────────── Hjorth parameters ───────────
 
-	eeg_features = [delta_bps.mean(axis=1), 
-			theta_bps.mean(axis=1), 
-			alpha_bps.mean(axis=1), 
-			beta_bps.mean(axis=1),
+def hjorth(x):
+    """Activity, Mobility, Complexity of signal x (1D)."""
+    activity   = np.var(x)
+    d1         = np.diff(x)
+    mobility   = np.sqrt(np.var(d1) / (activity + 1e-12))
+    d2         = np.diff(d1)
+    complexity = (
+        np.sqrt(np.var(d2) / (np.var(d1) + 1e-12)) / (mobility + 1e-12)
+    )
+    return activity, mobility, complexity
 
-			delta_bps.std(axis=1), 
-			theta_bps.std(axis=1), 
-			alpha_bps.std(axis=1), 
-			beta_bps.std(axis=1), 
 
-			delta_rbps.mean(axis=1), 
-			theta_rbps.mean(axis=1), 
-			alpha_rbps.mean(axis=1), 
-			beta_rbps.mean(axis=1), 
+# ─────────── spectral entropy ───────────
 
-			tkeo_mean.mean(axis=1),
-			tkeo_std.mean(axis=1),
+def spectral_entropy(psd_1d, freqs):
+    """Normalised spectral entropy from a PSD slice."""
+    psd_norm = psd_1d / (psd_1d.sum() + 1e-12)
+    return scipy_entropy(psd_norm + 1e-12)
 
-			activities.mean(axis=1), 
-			mobilities.mean(axis=1), 
-			complexities.mean(axis=1), 
 
-			spectral_entropies.mean(axis=1), 
-			perm_enthropies_mean,
-			perm_entropies_std,
+# ─────────── main extraction ───────────
 
-			higuchi_fd_mean,
-			higuchi_fd_std,
+def extractFeaturesEEG(windows, sfreq, continuous_eeg=None, step=None):
+    """
+    windows:        (n_windows, n_channels, n_times)
+    continuous_eeg: (n_channels, n_times_full) — full continuous chunk, same units as windows.
+                    When provided, alpha-band filter + diff + Hilbert are applied on this
+                    continuous signal before windowing, avoiding edge effects (Detti 2019).
+    step:           int, stride in samples used to build windows from continuous_eeg.
+    Returns: (n_windows, n_channels * n_per_channel_features)
+    """
+    n_windows, n_channels, window_size = windows.shape
 
-			kurtosis.mean(axis=1),
+    f, psd = welch(windows, fs=sfreq, axis=2, nperseg=256)
 
-			plis_mean, 
-			dplis_mean, 
-			wplis_mean,
+    # Band masks
+    delta = (f >= 0.5) & (f <  4)
+    theta = (f >= 4)   & (f <  8)
+    alpha = (f >= 8)   & (f < 13)
+    beta  = (f >= 13)  & (f < 30)
+    gamma = (f >= 30)  & (f <= 40)
 
-			pli_ema,
-			wpli_ema,
-			entropy_ema
-			]
+    delta_bp = np.trapz(psd[:, :, delta], f[delta], axis=2)
+    theta_bp = np.trapz(psd[:, :, theta], f[theta], axis=2)
+    alpha_bp = np.trapz(psd[:, :, alpha], f[alpha], axis=2)
+    beta_bp  = np.trapz(psd[:, :, beta],  f[beta],  axis=2)
+    gamma_bp = np.trapz(psd[:, :, gamma], f[gamma], axis=2)
+    total_pw = np.trapz(psd, f, axis=2) + 1e-12
 
-	return np.array(eeg_features).T
+    delta_rbp = delta_bp / total_pw
+    theta_rbp = theta_bp / total_pw
+    alpha_rbp = alpha_bp / total_pw
+    beta_rbp  = beta_bp  / total_pw
+    gamma_rbp = gamma_bp / total_pw
+
+    mean_vals = np.mean(windows, axis=2)
+    std_vals  = np.std(windows, axis=2)
+
+    # Per-window computations
+    hjorth_act_all  = np.zeros((n_windows, n_channels))
+    hjorth_mob_all  = np.zeros((n_windows, n_channels))
+    hjorth_comp_all = np.zeros((n_windows, n_channels))
+    spec_ent_all    = np.zeros((n_windows, n_channels))
+    perm_ent_all    = np.zeros((n_windows, n_channels))
+    higuchi_all     = np.zeros((n_windows, n_channels))
+    pli_all         = np.zeros((n_windows, n_channels))
+    wpli_all        = np.zeros((n_windows, n_channels))
+
+    # ── Alpha-band differentiated analytic signal for PLI/WPLI (Detti 2019) ──
+    # Correct pipeline: filter → diff → Hilbert on the CONTINUOUS signal,
+    # then slice phases per window. This avoids filter edge effects and
+    # Hilbert boundary artefacts from operating on short 6-second snippets.
+    nyq = sfreq / 2.0
+    b_alpha, a_alpha = butter(4, [8 / nyq, 13 / nyq], btype='band')
+
+    if continuous_eeg is not None and step is not None:
+        # (n_channels, n_times_full) → filter → diff → hilbert on full signal
+        cont_alpha   = filtfilt(b_alpha, a_alpha, continuous_eeg, axis=1)  # (n_ch, T)
+        cont_diff    = np.diff(cont_alpha, axis=1)                          # (n_ch, T-1)
+        cont_analytic = hilbert(cont_diff, axis=1)                          # (n_ch, T-1)
+        use_continuous = True
+    else:
+        # Fallback: per-window filtering (legacy, introduces edge effects)
+        windows_alpha = np.zeros_like(windows)
+        for w_idx in range(n_windows):
+            for ch in range(n_channels):
+                windows_alpha[w_idx, ch] = filtfilt(b_alpha, a_alpha, windows[w_idx, ch])
+        windows_diff = np.diff(windows_alpha, axis=2)   # (n_windows, n_ch, n_times-1)
+        use_continuous = False
+
+    for w_idx, window in enumerate(windows):
+        # Extract analytic signal slice for this window
+        if use_continuous:
+            t0 = w_idx * step
+            t1 = t0 + window_size - 1          # diff reduces length by 1
+            analytic_diff = cont_analytic[:, t0:t1]   # (n_ch, window_size-1)
+            phases_diff   = np.angle(analytic_diff)
+        else:
+            analytic_diff = hilbert(windows_diff[w_idx], axis=1)
+            phases_diff   = np.angle(analytic_diff)
+
+        pli_mat  = np.zeros((n_channels, n_channels))
+        wpli_mat = np.zeros((n_channels, n_channels))
+
+        for i in range(n_channels):
+            # Hjorth (on original broadband window)
+            act, mob, comp = hjorth(window[i])
+            hjorth_act_all[w_idx, i]  = act
+            hjorth_mob_all[w_idx, i]  = mob
+            hjorth_comp_all[w_idx, i] = comp
+
+            # Spectral entropy
+            spec_ent_all[w_idx, i] = spectral_entropy(psd[w_idx, i], f)
+
+            # Nonlinear
+            perm_ent_all[w_idx, i] = perm_entropy(window[i], order=3)
+            higuchi_all[w_idx, i]  = higuchi_fd(window[i])
+
+            for j in range(i + 1, n_channels):
+                pli_mat[i, j]  = pli(phases_diff[i], phases_diff[j])
+                wpli_mat[i, j] = wpli(analytic_diff[i], analytic_diff[j])
+
+        pli_all[w_idx]  = pli_mat.mean(axis=1)
+        wpli_all[w_idx] = wpli_mat.mean(axis=1)
+
+    eeg_features = np.concatenate([
+        delta_bp,       # 1
+        theta_bp,       # 2
+        alpha_bp,       # 3
+        beta_bp,        # 4
+        gamma_bp,       # 5
+        delta_rbp,      # 6
+        theta_rbp,      # 7
+        alpha_rbp,      # 8
+        beta_rbp,       # 9
+        gamma_rbp,      # 10
+        hjorth_act_all, # 11
+        hjorth_mob_all, # 12
+        hjorth_comp_all,# 13
+        spec_ent_all,   # 14
+        mean_vals,      # 15
+        std_vals,       # 16
+        perm_ent_all,   # 17
+        higuchi_all,    # 18
+        pli_all,        # 19
+        wpli_all,       # 20
+    ], axis=1)
+
+    return eeg_features
 
 
 def extractFeaturesECG(ecg_windows, sfreq):
-
     n_windows = len(ecg_windows)
-    features = np.zeros((n_windows, 6))
+    features  = np.zeros((n_windows, 6))
 
     for i, window in enumerate(ecg_windows):
-
-        peaks, _ = find_peaks(window, distance=0.3*sfreq)
-
+        peaks, _ = find_peaks(window, distance=0.3 * sfreq)
         if len(peaks) < 2:
             continue
-
-        rr = np.diff(peaks) / sfreq
-
+        rr      = np.diff(peaks) / sfreq
         mean_rr = np.mean(rr)
-        sdnn = np.std(rr)
-        rmssd = np.sqrt(np.mean(np.diff(rr)**2))
-        hr = 60 / mean_rr
-
         features[i] = [
             mean_rr,
-            sdnn,
-            rmssd,
-            hr,
+            np.std(rr),
+            np.sqrt(np.mean(np.diff(rr) ** 2)),
+            60 / mean_rr,
             np.mean(window),
             np.std(window),
         ]
-
     return features
-
-

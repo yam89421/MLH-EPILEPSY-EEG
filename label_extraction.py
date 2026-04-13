@@ -81,8 +81,8 @@ def extractLabels(edf_file, n_windows, window_size, step, sfreq, start_sample):
 	step_sec = step / sfreq
 	offset_sec = start_sample / sfreq
 
-	preictal_range_min = 30
-	preictal_range = int(preictal_range_min * 60 / step_sec)
+	preictal_range_sec = 300  # 5 minutes (Detti et al. 2019: T=300s prediction interval)
+	preictal_range = int(preictal_range_sec / step_sec)
 
 	labels = np.zeros(n_windows)
 

@@ -14,12 +14,12 @@ def save(data, filepath, column_names):
 
 def process():
 
-    WINDOW = 10  # segmentation window in sec
+    WINDOW =  6 # segmentation window in sec
     chunk_duration = 60 * 60  # 1h chunks
     sfreq = 128
 
     window_size = int(WINDOW * sfreq)
-    step = window_size // 2
+    step = sfreq  # 1-second step (Detti et al. 2019: 6s window, 1s overlap)
 
     patient = ""
 
@@ -30,7 +30,7 @@ def process():
     eeg_channels = ['Fp1', 'F3', 'C3', 'P3', 'O1', 'F7', 'T3', 'T5', 'Fc1', 'Fc5', 'Cp1', 'Cp5', 'F9', 'Fz', 'Cz', 'Pz', 'Fp2', 'F4', 'C4', 'P4', 'O2', 'F8', 'T4', 'T6', 'Fc2', 'Fc6', 'Cp2', 'Cp6', 'F10']
 
 
-    for r in records[26:27]:
+    for r in records:
         
         edf_file = r.split("/")[-1].strip()
 
@@ -122,12 +122,23 @@ def process():
             eeg_windows = eeg_windows[:, ::step, :]
             eeg_windows = eeg_windows.transpose(1, 0, 2)
 
-            
 
+            eeg_features = extractFeaturesEEG(
+                eeg_windows * 1e6,
+                sfreq,
+                continuous_eeg=eeg_data * 1e6,
+                step=step,
+            )
 
+            n_features_per_channel = len(EEG_FEATURES_NAMES)
+            n_channels = eeg_features.shape[1] // n_features_per_channel
 
-            eeg_features = extractFeaturesEEG(eeg_windows*1e6, sfreq)
-            save(eeg_features, eeg_features_fullpath, EEG_FEATURES_NAMES)
+            features_names = []
+            for feat in EEG_FEATURES_NAMES:
+                for ch in range(1, n_channels + 1):
+                    features_names.append(f"{feat}_CH{ch}")
+
+            save(eeg_features, eeg_features_fullpath, features_names)   
 
 
             labels = extractLabels(
@@ -144,3 +155,10 @@ def process():
             del eeg_windows
             del eeg_data
 
+
+if __name__ == "__main__":
+    process()
+    print("\nMerging per-recording CSVs into patient-level CSVs...")
+    from features_discrimination import mergeData
+    mergeData()
+    print("Done.")
